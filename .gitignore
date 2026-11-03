@@ -1,0 +1,8 @@
+# No upstream source or build outputs committed
+/kernel/
+/dist/
+/modules/
+/headers/
+/perf/
+*.vhdx
+bzImage

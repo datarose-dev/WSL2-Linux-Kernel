@@ -1,0 +1,309 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Rózsa Zoltán (@rozsazoltan)
+
+# Build from Microsoft sources; maintain only patches here.
+name: Release Datarose WSL2 kernel
+
+# Run manually, on patch changes, or once per day.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - patches/**
+      - config/upstream-series
+  schedule:
+    - cron: '19 6 * * *'
+
+permissions:
+  contents: read
+
+# Avoid overlapping builds and release version conflicts.
+concurrency:
+  group: wsl2-datarose-kernel-release
+  cancel-in-progress: false
+
+jobs:
+  # Request review before switching to a newer kernel series.
+  check-upstream-series:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout Datarose patch repository
+        uses: actions/checkout@v4
+
+      - name: Detect new Microsoft kernel series and open PR
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_series="$(cat config/upstream-series)"
+          [[ "$current_series" =~ ^[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid configured series: $current_series" >&2
+            exit 1
+          }
+
+          # Find newest Microsoft release across kernel series.
+          latest_tag="$(
+            gh api 'repos/microsoft/WSL2-Linux-Kernel/releases?per_page=100' --paginate --jq '.[].tag_name' |
+              grep -E '^linux-msft-wsl-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' |
+              sort -V | tail -n 1
+          )"
+          [[ -n "$latest_tag" ]] || { echo 'No Microsoft WSL release found' >&2; exit 1; }
+          latest_series="$(sed -E 's/^linux-msft-wsl-([0-9]+\.[0-9]+)\..*$/\1/' <<< "$latest_tag")"
+
+          if [[ "$latest_series" == "$current_series" ]] ||
+             [[ "$(printf '%s\n' "$current_series" "$latest_series" | sort -V | tail -n 1)" == "$current_series" ]]; then
+            echo "Configured series: $current_series; latest upstream series: $latest_series"
+            exit 0
+          fi
+
+          branch="bot/upstream-series-${latest_series}"
+          # Avoid duplicate pull requests for the same series.
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq 'length')"
+          if [[ "$existing" != 0 ]]; then
+            echo "Open PR already exists for $latest_series ($branch)"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            git fetch origin "$branch"
+            git switch -c "$branch" FETCH_HEAD
+          else
+            git switch -c "$branch"
+          fi
+          printf '%s\n' "$latest_series" > config/upstream-series
+          git add config/upstream-series
+          if git diff --cached --quiet; then
+            echo "Branch already records $latest_series"
+          else
+            git commit -m "chore: track Microsoft WSL ${latest_series} kernel series"
+            git push --set-upstream origin "$branch"
+          fi
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "chore: track Microsoft WSL ${latest_series} kernel series" \
+            --body "Microsoft released \`$latest_tag\` on a newer kernel series. Update \`config/upstream-series\` from \`$current_series\` to \`$latest_series\`. Review and merge to enable new-series builds. No kernel source is vendored."
+
+  # Build current series and publish an immutable release.
+  release:
+    needs: check-upstream-series
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Datarose patch repository
+        uses: actions/checkout@v4
+
+      - name: Resolve latest Microsoft WSL release and build revision
+        id: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          upstream_series="$(cat config/upstream-series)"
+          # Select latest release within the configured series.
+          upstream_tag="$(
+            gh api 'repos/microsoft/WSL2-Linux-Kernel/releases?per_page=100' --paginate --jq '.[].tag_name' |
+              grep -E "^linux-msft-wsl-${upstream_series}\.[0-9]+\.[0-9]+$" |
+              sort -V | tail -n 1
+          )"
+          test -n "$upstream_tag" || { echo 'No matching Microsoft WSL release' >&2; exit 1; }
+          version="${upstream_tag#linux-msft-wsl-}"
+          base_tag="linux-datarose-wsl-${version}"
+          release_tag="$base_tag"
+
+          # Skip scheduled duplicates; number manual rebuilds -r2, -r3, etc.
+          if gh release view "$base_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$GITHUB_EVENT_NAME" == 'schedule' ]]; then
+              echo "Already released: $base_tag"
+              echo 'build=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            max_revision=1
+            while IFS= read -r tag; do
+              if [[ "$tag" =~ ^${base_tag}-r([0-9]+)$ ]]; then
+                (( ${BASH_REMATCH[1]} > max_revision )) && max_revision="${BASH_REMATCH[1]}"
+              fi
+            done < <(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq '.[].tag_name')
+            release_tag="${base_tag}-r$((max_revision + 1))"
+          fi
+          {
+            echo "upstream_tag=$upstream_tag"
+            echo "release_tag=$release_tag"
+            echo 'build=true'
+          } >> "$GITHUB_OUTPUT"
+
+      # Tools for compiling the kernel and packaging its modules.
+      - name: Install build dependencies
+        if: steps.upstream.outputs.build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison dwarves libssl-dev libelf-dev \
+            cpio qemu-utils rsync bc e2fsprogs pkg-config zip unzip
+
+      - name: Clone upstream and apply repository patches
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          # Fetch exact upstream release for reproducible builds.
+          git clone --depth 1 --filter=blob:none --branch "$UPSTREAM_TAG" \
+            https://github.com/microsoft/WSL2-Linux-Kernel.git kernel
+
+          # Apply each patch separately; report successes and exact failures.
+          export LC_ALL=C
+          shopt -s nullglob
+          patches=("$GITHUB_WORKSPACE"/patches/*.patch)
+          (( ${#patches[@]} > 0 )) || {
+            echo 'No patch files found in patches/' >&2
+            exit 1
+          }
+
+          applied=()
+          report_patch_failure() {
+            local failed="$1"
+            echo "FAILED: $failed" >&2
+            echo 'Previously applied patches:' >&2
+            if (( ${#applied[@]} > 0 )); then
+              printf '  OK: %s\n' "${applied[@]}" >&2
+            else
+              echo '  (none)' >&2
+            fi
+            {
+              echo '### Kernel patch application: FAILED'
+              echo
+              for name in "${applied[@]}"; do
+                printf -- '- Applied: `%s`\n' "$name"
+              done
+              printf -- '- Failed: `%s`\n' "$failed"
+              echo
+              echo 'See `git apply` error above for exact file and hunk.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error file=patches/$failed,title=Patch failed::Cannot apply $failed to $UPSTREAM_TAG"
+            exit 1
+          }
+
+          # Filename order makes multi-patch builds predictable.
+          for i in "${!patches[@]}"; do
+            patch="${patches[$i]}"
+            name="$(basename "$patch")"
+            echo "::group::Patch $((i + 1))/${#patches[@]}: $name"
+            if ! git -C kernel apply --check "$patch"; then
+              echo '::endgroup::'
+              report_patch_failure "$name"
+            fi
+            if ! git -C kernel apply "$patch"; then
+              echo '::endgroup::'
+              report_patch_failure "$name"
+            fi
+            applied+=("$name")
+            echo "OK: $name"
+            echo '::endgroup::'
+          done
+
+          {
+            echo '### Kernel patch application: SUCCESS'
+            echo
+            for name in "${applied[@]}"; do
+              printf -- '- Applied: `%s`\n' "$name"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package complete corresponding kernel source
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Ship matching patched source for GPL compliance.
+          tar -C kernel --exclude=.git -czf dist/source.tar.gz .
+          cp patches/*.patch dist/
+
+      - name: Build bzImage and matching kernel modules
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          # Use Microsoft config with repository patches applied.
+          export KCONFIG_CONFIG=Microsoft/config-wsl
+          make -j4
+          make INSTALL_MOD_PATH="$GITHUB_WORKSPACE/modules" INSTALL_MOD_STRIP=1 modules_install
+          make headers_install INSTALL_HDR_PATH="$GITHUB_WORKSPACE/headers"
+          make -C tools/perf NO_JEVENTS=1 NO_JVMTI=1 NO_LIBTRACEEVENT=1 \
+            install DESTDIR="$GITHUB_WORKSPACE/perf" prefix=/
+          cp arch/x86/boot/bzImage "$GITHUB_WORKSPACE/dist/bzImage"
+          ./Microsoft/scripts/gen_artifacts_vhdx.sh \
+            "$GITHUB_WORKSPACE/modules" \
+            "$GITHUB_WORKSPACE/headers" \
+            "$GITHUB_WORKSPACE/perf" \
+            "$(make -s kernelrelease)" \
+            "$GITHUB_WORKSPACE/dist/modules.vhdx"
+
+      - name: Bundle Windows x64 files for mise
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # mise downloads one ZIP containing kernel and matching modules.
+          (cd dist && zip -q -9 wsl2-kernel-windows-x64.zip bzImage modules.vhdx)
+          unzip -l dist/wsl2-kernel-windows-x64.zip
+
+      - name: Publish GPL-compliant release
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.upstream_tag }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # Track exact upstream source and verify release downloads.
+          (cd dist && sha256sum bzImage modules.vhdx wsl2-kernel-windows-x64.zip source.tar.gz ./*.patch > SHA256SUMS)
+          upstream_sha="$(git -C kernel rev-parse HEAD)"
+          kernel_version="$(make -s -C kernel KCONFIG_CONFIG=Microsoft/config-wsl kernelrelease)"
+          cat > dist/RELEASE_NOTES.md <<EOF_NOTES
+          Unofficial Datarose build of Microsoft's WSL2 Linux kernel.
+
+          - Original upstream tag: \`$UPSTREAM_TAG\`
+          - Original upstream commit: \`$upstream_sha\`
+          - Kernel version (\`uname -r\`): \`$kernel_version\`
+          - Change: \`CONFIG_UDMABUF=y\` in \`Microsoft/config-wsl\`.
+          - Maintainer: Rózsa Zoltán (@rozsazoltan).
+
+          Assets: \`bzImage\`, matching \`modules.vhdx\`, \`wsl2-kernel-windows-x64.zip\`
+          (mise-compatible bundle), complete patched \`source.tar.gz\`,
+          applied \`*.patch\` files, and \`SHA256SUMS\`.
+
+          Linux kernel: GPL-2.0 WITH Linux-syscall-note, plus relevant per-file
+          SPDX licences preserved in the upstream source archive. Original
+          third-party copyright notices remain intact. Datarose-authored
+          build automation and documentation: GPL-2.0-only.
+
+          Not an official Microsoft build. No guarantee of Reims/vGPU support.
+          EOF_NOTES
+          # Publish binaries, patches and corresponding source together.
+          gh release create "$RELEASE_TAG" \
+            dist/bzImage dist/modules.vhdx dist/wsl2-kernel-windows-x64.zip \
+            dist/source.tar.gz \
+            dist/*.patch dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
+            --latest \
+            --notes-file dist/RELEASE_NOTES.md
