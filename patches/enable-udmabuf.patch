@@ -1,7 +1,7 @@
 diff --git a/Microsoft/config-wsl b/Microsoft/config-wsl
 --- a/Microsoft/config-wsl
 +++ b/Microsoft/config-wsl
-@@ -5385,7 +5385,7 @@
+@@ -5384,7 +5384,7 @@
  #
  CONFIG_SYNC_FILE=y
  # CONFIG_SW_SYNC is not set
