@@ -49,17 +49,68 @@ param(
         throw "Unexpected files in ${installDir}: $unexpectedNames. Refusing to replace non-Datarose files."
     }
 
-    # Download and verify replacement before touching the active kernel.
+    # Resolve a published release, not a cached mise version or a leftover Git tag.
+    $apiBase = 'https://api.github.com/repos/datarose-dev/WSL2-Linux-Kernel/releases'
+    $headers = @{
+        'Accept' = 'application/vnd.github+json'
+        'User-Agent' = 'datarose-wsl2-kernel-updater'
+        'Cache-Control' = 'no-cache'
+    }
+    if ($Version -eq 'latest') {
+        $releaseUri = "$apiBase/latest"
+    } else {
+        $releaseUri = "$apiBase/tags/linux-datarose-wsl-$Version"
+    }
+    try {
+        $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers -ErrorAction Stop
+    } catch {
+        throw "Cannot find published Datarose release ($Version): $($_.Exception.Message). Old installation kept."
+    }
+    $releaseVersionMatch = [regex]::Match(
+        [string]$release.tag_name,
+        '^linux-datarose-wsl-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?:-r[0-9]+)?)$'
+    )
+    if ($release.draft -or $release.prerelease -or -not $releaseVersionMatch.Success) {
+        throw "Invalid or unpublished Datarose release: $($release.tag_name). Old installation kept."
+    }
+    $resolvedVersion = $releaseVersionMatch.Groups[1].Value
+    $assets = @($release.assets | Where-Object { $_.name -eq 'wsl2-kernel-windows-x64.zip' -and $_.state -eq 'uploaded' })
+    if ($assets.Count -ne 1) {
+        throw "Release $($release.tag_name) has no uploaded Windows kernel ZIP. Old installation kept."
+    }
+    Write-Output "Selected release: $($release.tag_name)"
+
+    # Keep mise's version cache and install state away from the active kernel.
     $stage = "$installDir.update-$PID"
     $backup = "$installDir.backup-$PID"
-    if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $backup)) {
+    $sandbox = "$installDir.mise-$PID"
+    if ((Test-Path -LiteralPath $stage) -or
+        (Test-Path -LiteralPath $backup) -or
+        (Test-Path -LiteralPath $sandbox)) {
         throw 'Temporary update/backup path already exists. Refusing to overwrite it.'
     }
 
-    $tool = "github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@$Version"
+    $tool = "github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@$resolvedVersion"
     try {
-        & mise install-into $tool $stage
-        if ($LASTEXITCODE -ne 0) { throw "mise install-into failed (exit code $LASTEXITCODE)." }
+        $miseEnvNames = @('MISE_DATA_DIR', 'MISE_INSTALLS_DIR', 'MISE_CACHE_DIR', 'MISE_STATE_DIR')
+        $savedMiseEnv = @{}
+        foreach ($name in $miseEnvNames) {
+            $savedMiseEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        try {
+            $env:MISE_DATA_DIR = $sandbox
+            $env:MISE_INSTALLS_DIR = Join-Path $sandbox 'installs'
+            $env:MISE_CACHE_DIR = Join-Path $sandbox 'cache'
+            $env:MISE_STATE_DIR = Join-Path $sandbox 'state'
+            & mise install-into $tool $stage
+            if ($LASTEXITCODE -ne 0) {
+                throw "mise install-into failed (exit code $LASTEXITCODE). Old installation kept."
+            }
+        } finally {
+            foreach ($name in $miseEnvNames) {
+                [Environment]::SetEnvironmentVariable($name, $savedMiseEnv[$name], 'Process')
+            }
+        }
         foreach ($filename in @('bzImage', 'modules.vhdx')) {
             if (-not (Test-Path -LiteralPath (Join-Path $stage $filename) -PathType Leaf)) {
                 throw "New kernel bundle is missing $filename. Old installation kept."
@@ -94,6 +145,9 @@ param(
     } finally {
         if (Test-Path -LiteralPath $stage) {
             Remove-Item -LiteralPath $stage -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $sandbox) {
+            Remove-Item -LiteralPath $sandbox -Recurse -Force
         }
     }
 }
