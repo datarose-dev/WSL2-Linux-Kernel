@@ -31,22 +31,30 @@ param(
     }
     $installDir = Join-Path $installsRoot 'github-datarose-dev-wsl2-linux-kernel'
 
-    if (-not (Test-Path -LiteralPath $installDir -PathType Container)) {
-        throw "Kernel not installed: $installDir. Run install.ps1 first."
-    }
-    foreach ($filename in @('bzImage', 'modules.vhdx')) {
-        if (-not (Test-Path -LiteralPath (Join-Path $installDir $filename) -PathType Leaf)) {
-            throw "Missing $filename in $installDir. Refusing to overwrite unrelated mise files."
+    # Missing kernel files indicate an incomplete installation, not unrelated files.
+    # Still refuse to replace a directory containing unexpected user data.
+    $installExists = Test-Path -LiteralPath $installDir
+    if ($installExists) {
+        if (-not (Test-Path -LiteralPath $installDir -PathType Container)) {
+            throw "Kernel installation path is not a directory: $installDir"
         }
-    }
-    $unexpected = @(Get-ChildItem -LiteralPath $installDir -Force | Where-Object {
-        $_.Name -notin @('bzImage', 'modules.vhdx', '.mise.backend.toml')
-    })
-    if ($unexpected.Count -gt 0) {
-        $unexpectedNames = ($unexpected | ForEach-Object {
-            if ($_.PSIsContainer) { "$($_.Name)/" } else { $_.Name }
-        }) -join ', '
-        throw "Unexpected files in ${installDir}: $unexpectedNames. Refusing to replace non-Datarose files."
+        $unexpected = @(Get-ChildItem -LiteralPath $installDir -Force | Where-Object {
+            $_.Name -notin @('bzImage', 'modules.vhdx', '.mise.backend.toml') -or $_.PSIsContainer
+        })
+        if ($unexpected.Count -gt 0) {
+            $unexpectedNames = ($unexpected | ForEach-Object {
+                if ($_.PSIsContainer) { "$($_.Name)/" } else { $_.Name }
+            }) -join ', '
+            throw "Unexpected files in ${installDir}: $unexpectedNames. Refusing to replace non-Datarose files."
+        }
+        $missing = @(@('bzImage', 'modules.vhdx') | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $installDir $_) -PathType Leaf)
+        })
+        if ($missing.Count -gt 0) {
+            Write-Warning "Incomplete kernel installation (missing: $($missing -join ', ')). Repairing."
+        }
+    } else {
+        Write-Warning "Kernel installation missing: $installDir. Installing from release."
     }
 
     # Resolve a published release, not a cached mise version or a leftover Git tag.
@@ -124,21 +132,30 @@ param(
         & wsl.exe --shutdown
         if ($LASTEXITCODE -ne 0) { throw "wsl --shutdown failed (exit code $LASTEXITCODE)." }
 
-        Move-Item -LiteralPath $installDir -Destination $backup -ErrorAction Stop
+        # A missing install directory is a first-time repair: nothing to back up.
+        $hasBackup = $false
+        if (Test-Path -LiteralPath $installDir) {
+            Move-Item -LiteralPath $installDir -Destination $backup -ErrorAction Stop
+            $hasBackup = $true
+        }
         try {
             Move-Item -LiteralPath $stage -Destination $installDir -ErrorAction Stop
         } catch {
-            try {
-                Move-Item -LiteralPath $backup -Destination $installDir -ErrorAction Stop
-            } catch {
-                throw "Cannot restore previous installation. Backup remains at: $backup. $($_.Exception.Message)"
+            if ($hasBackup) {
+                try {
+                    Move-Item -LiteralPath $backup -Destination $installDir -ErrorAction Stop
+                } catch {
+                    throw "Cannot restore previous installation. Backup remains at: $backup. $($_.Exception.Message)"
+                }
             }
             throw
         }
-        try {
-            Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop
-        } catch {
-            Write-Warning "Kernel updated, but old backup could not be deleted: $backup"
+        if ($hasBackup) {
+            try {
+                Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop
+            } catch {
+                Write-Warning "Kernel updated, but old backup could not be deleted: $backup"
+            }
         }
         Write-Output "Kernel updated: $installDir"
         Write-Output '.wslconfig path unchanged. Start WSL when ready.'
