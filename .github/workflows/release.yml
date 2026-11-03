@@ -4,15 +4,9 @@
 # Build from Microsoft sources; maintain only patches here.
 name: Release Datarose WSL2 kernel
 
-# Run manually, on patch changes, or once per day.
+# Run manually or once per day.
 on:
   workflow_dispatch:
-  push:
-    branches: [master]
-    paths:
-      - .github/workflows/release.yml
-      - patches/**
-      - config/upstream-series
   schedule:
     - cron: '19 6 * * *'
 

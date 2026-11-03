@@ -1,6 +1,6 @@
-diff --git a/Microsoft/config-wsl b/Microsoft/config-wsl
---- a/Microsoft/config-wsl
-+++ b/Microsoft/config-wsl
+diff --git a/arch/x86/configs/config-wsl b/arch/x86/configs/config-wsl
+--- a/arch/x86/configs/config-wsl
++++ b/arch/x86/configs/config-wsl
 @@ -5384,7 +5384,7 @@
  #
  CONFIG_SYNC_FILE=y

@@ -27,7 +27,7 @@ Microsoft: linux-msft-wsl-6.18.58.1
 Datarose:  linux-datarose-wsl-6.18.58.1
 ```
 
-Release revisions are automatic: first build of each upstream version has **no revision suffix**. If an already released upstream version is rebuilt by a manual workflow run or a patch/workflow push, the next available suffix is used (`-r2`, `-r3`, …). Scheduled checks do not rebuild already published versions. Existing releases are not overwritten. Upstream tag and commit are recorded in release notes. **This repository contains no vendored kernel source.**
+Release revisions are automatic: first build of each upstream version has **no revision suffix**. If an already released upstream version is rebuilt by a manual workflow run, the next available suffix is used (`-r2`, `-r3`, …). Scheduled checks do not rebuild already published versions. Existing releases are not overwritten. Upstream tag and commit are recorded in release notes. **This repository contains no vendored kernel source.**
 
 ```text
 Microsoft: linux-msft-wsl-6.18.60.1
