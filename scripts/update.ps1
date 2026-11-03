@@ -40,7 +40,7 @@ param(
         }
     }
     $unexpected = @(Get-ChildItem -LiteralPath $installDir -Force | Where-Object {
-        $_.Name -notin @('bzImage', 'modules.vhdx')
+        $_.Name -notin @('bzImage', 'modules.vhdx', '.mise.backend.toml')
     })
     if ($unexpected.Count -gt 0) {
         throw "Unexpected files in $installDir. Refusing to replace non-Datarose files."
