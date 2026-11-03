@@ -162,7 +162,11 @@ jobs:
         run: |
           set -euo pipefail
           # Fetch exact upstream release for reproducible builds.
-          git clone --depth 1 --filter=blob:none --branch "$UPSTREAM_TAG" \
+          git clone \
+            --depth 1 \
+            --single-branch \
+            --no-tags \
+            --branch "$UPSTREAM_TAG" \
             https://github.com/microsoft/WSL2-Linux-Kernel.git kernel
 
           # Apply each patch separately; report successes and exact failures.
