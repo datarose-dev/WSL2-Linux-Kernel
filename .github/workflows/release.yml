@@ -8,7 +8,7 @@ name: Release Datarose WSL2 kernel
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - .github/workflows/release.yml
       - patches/**
@@ -89,7 +89,7 @@ jobs:
           fi
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
-            --base main \
+            --base master \
             --head "$branch" \
             --title "chore: track Microsoft WSL ${latest_series} kernel series" \
             --body "Microsoft released \`$latest_tag\` on a newer kernel series. Update \`config/upstream-series\` from \`$current_series\` to \`$latest_series\`. Review and merge to enable new-series builds. No kernel source is vendored."
