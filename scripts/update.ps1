@@ -43,7 +43,10 @@ param(
         $_.Name -notin @('bzImage', 'modules.vhdx', '.mise.backend.toml')
     })
     if ($unexpected.Count -gt 0) {
-        throw "Unexpected files in $installDir. Refusing to replace non-Datarose files."
+        $unexpectedNames = ($unexpected | ForEach-Object {
+            if ($_.PSIsContainer) { "$($_.Name)/" } else { $_.Name }
+        }) -join ', '
+        throw "Unexpected files in ${installDir}: $unexpectedNames. Refusing to replace non-Datarose files."
     }
 
     # Download and verify replacement before touching the active kernel.
