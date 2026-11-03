@@ -121,8 +121,8 @@ Remove `kernel` and `kernelModules` entries from `%USERPROFILE%\.wslconfig` (pre
 
 ## Licence and copyright
 
-- **Linux kernel and Microsoft WSL modifications:** GPL version 2 only, with Linux syscall exception (`GPL-2.0 WITH Linux-syscall-note`), plus any other per-file licences present in upstream source. See [`COPYING`](COPYING), [`LICENSES`](LICENSES), and complete source in each release. Existing copyright notices remain with original authors, including Linux contributors and Microsoft.
+- **Linux kernel and Microsoft WSL modifications:** GPL version 2 only, with Linux syscall exception (`GPL-2.0 WITH Linux-syscall-note`), plus any other per-file licences present in upstream source. See [`COPYING`](COPYING), [`LICENSES`](LICENSES), upstream kernel source referenced in release notes, and [`patches/`](patches/). Existing copyright notices remain with original authors, including Linux contributors and Microsoft.
 - **Datarose-authored workflow, patch and documentation:** GPL-2.0-only. Copyright © 2026 **Rózsa Zoltán** ([@rozsazoltan](https://github.com/rozsazoltan)). See [`NOTICE.md`](NOTICE.md).
 - This project is **unofficial**, not affiliated with or endorsed by Microsoft or Linux Foundation.
 
-Binary releases include their exact corresponding source code to facilitate GPLv2 source distribution obligations. If you redistribute binaries, preserve associated licences and source availability.
+Each release publishes one binary asset, `wsl2-kernel-windows-x64.zip`, containing `bzImage` and matching `modules.vhdx`. GitHub-generated source archives contain only this patch repository, not the complete modified kernel source. Release notes identify the exact upstream commit and this repository's patches. GPLv2 requires access to complete corresponding source when distributing binaries; upstream source and patches alone should not be assumed to satisfy that obligation.

@@ -222,15 +222,9 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Package complete corresponding kernel source
+      - name: Prepare release output
         if: steps.upstream.outputs.build == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          # Ship matching patched source for GPL compliance.
-          tar -C kernel --exclude=.git -czf dist/source.tar.gz .
-          cp patches/*.patch dist/
+        run: mkdir -p dist
 
       - name: Build bzImage and matching kernel modules
         if: steps.upstream.outputs.build == 'true'
@@ -240,12 +234,27 @@ jobs:
           cd kernel
           # Use Microsoft config with repository patches applied.
           export KCONFIG_CONFIG=Microsoft/config-wsl
-          make -j4
+          make -j"$(nproc)"
           make INSTALL_MOD_PATH="$GITHUB_WORKSPACE/modules" INSTALL_MOD_STRIP=1 modules_install
           make headers_install INSTALL_HDR_PATH="$GITHUB_WORKSPACE/headers"
+          cp arch/x86/boot/bzImage "$GITHUB_WORKSPACE/dist/bzImage"
+
+      - name: Build perf tools
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
           make -C tools/perf NO_JEVENTS=1 NO_JVMTI=1 NO_LIBTRACEEVENT=1 \
             install DESTDIR="$GITHUB_WORKSPACE/perf" prefix=/
-          cp arch/x86/boot/bzImage "$GITHUB_WORKSPACE/dist/bzImage"
+
+      - name: Package matching kernel modules VHDX
+        if: steps.upstream.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          export KCONFIG_CONFIG=Microsoft/config-wsl
           ./Microsoft/scripts/gen_artifacts_vhdx.sh \
             "$GITHUB_WORKSPACE/modules" \
             "$GITHUB_WORKSPACE/headers" \
@@ -262,7 +271,7 @@ jobs:
           (cd dist && zip -q -9 wsl2-kernel-windows-x64.zip bzImage modules.vhdx)
           unzip -l dist/wsl2-kernel-windows-x64.zip
 
-      - name: Publish GPL-compliant release
+      - name: Publish Windows bundle
         if: steps.upstream.outputs.build == 'true'
         shell: bash
         env:
@@ -271,8 +280,8 @@ jobs:
           RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
         run: |
           set -euo pipefail
-          # Track exact upstream source and verify release downloads.
-          (cd dist && sha256sum bzImage modules.vhdx wsl2-kernel-windows-x64.zip source.tar.gz ./*.patch > SHA256SUMS)
+          # Record exact upstream source and bundle checksum.
+          bundle_sha="$(sha256sum dist/wsl2-kernel-windows-x64.zip | cut -d ' ' -f1)"
           upstream_sha="$(git -C kernel rev-parse HEAD)"
           kernel_version="$(make -s -C kernel KCONFIG_CONFIG=Microsoft/config-wsl kernelrelease)"
           cat > dist/RELEASE_NOTES.md <<EOF_NOTES
@@ -284,22 +293,27 @@ jobs:
           - Change: \`CONFIG_UDMABUF=y\` in \`Microsoft/config-wsl\`.
           - Maintainer: Rózsa Zoltán (@rozsazoltan).
 
-          Assets: \`bzImage\`, matching \`modules.vhdx\`, \`wsl2-kernel-windows-x64.zip\`
-          (mise-compatible bundle), complete patched \`source.tar.gz\`,
-          applied \`*.patch\` files, and \`SHA256SUMS\`.
+          Asset: \`wsl2-kernel-windows-x64.zip\` (contains \`bzImage\` and
+          matching \`modules.vhdx\`; mise-compatible).
+          - Bundle SHA-256: \`$bundle_sha\`
+
+          Source references:
+          - Original Microsoft kernel: https://github.com/microsoft/WSL2-Linux-Kernel/tree/$upstream_sha
+          - Datarose patches and build workflow: https://github.com/$GITHUB_REPOSITORY/tree/$RELEASE_TAG
+
+          GitHub's automatic source archives contain this patch repository,
+          not the complete patched Microsoft kernel source. GPLv2 requires
+          corresponding source availability when distributing binaries.
 
           Linux kernel: GPL-2.0 WITH Linux-syscall-note, plus relevant per-file
-          SPDX licences preserved in the upstream source archive. Original
-          third-party copyright notices remain intact. Datarose-authored
-          build automation and documentation: GPL-2.0-only.
+          SPDX licences in upstream source. Datarose-authored build automation
+          and documentation: GPL-2.0-only. Original notices are preserved.
 
           Not an official Microsoft build. No guarantee of Reims/vGPU support.
           EOF_NOTES
-          # Publish binaries, patches and corresponding source together.
+          # Publish one downloadable Windows bundle.
           gh release create "$RELEASE_TAG" \
-            dist/bzImage dist/modules.vhdx dist/wsl2-kernel-windows-x64.zip \
-            dist/source.tar.gz \
-            dist/*.patch dist/SHA256SUMS \
+            dist/wsl2-kernel-windows-x64.zip \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_TAG" \

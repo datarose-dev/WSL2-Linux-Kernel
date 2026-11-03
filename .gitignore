@@ -6,3 +6,6 @@
 /perf/
 *.vhdx
 bzImage
+.serena
+.slim
+.planning
