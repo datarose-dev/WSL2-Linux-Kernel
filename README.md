@@ -99,6 +99,16 @@ wsl --shutdown
 
 `restore.ps1` removes only `kernel` and `kernelModules` from `[wsl2]` in `%USERPROFILE%\.wslconfig`, preserving other settings and saving a backup. It does not delete downloaded kernel files. All WSL2 distributions share the selected kernel.
 
+### Uninstall
+
+Remove the Datarose kernel and return to the default Microsoft kernel:
+
+```powershell
+irm 'https://raw.githubusercontent.com/datarose-dev/WSL2-Linux-Kernel/master/scripts/uninstall.ps1' | iex
+```
+
+`uninstall.ps1` stops WSL, removes Datarose `kernel` / `kernelModules` entries from `%USERPROFILE%\.wslconfig` (with a backup), and deletes the installed kernel files from mise's configured installs directory. Other WSL settings and unrelated kernel overrides remain unchanged. Unexpected files block deletion; rerunning after partial removal is supported. **Unlike `restore.ps1`, this removes the kernel files.**
+
 **Note:** `mise install-into` is a standalone installation, even inside mise's `installs/` directory. Do not manage the same directory through `mise use` / `mise install`; those commands may create versioned installations and conflict with these scripts.
 
 ## Licence and copyright
