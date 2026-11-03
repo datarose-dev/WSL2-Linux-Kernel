@@ -50,16 +50,19 @@ Install **mise on Windows**, not inside the WSL distribution: `.wslconfig` needs
 
    Open a new PowerShell session so `mise` is available.
 
-2. Install latest Datarose release globally. `version_prefix` removes `linux-datarose-wsl-` from the published tag; `asset_pattern` chooses the Windows bundle:
+2. Install latest Datarose release into the **mise installs directory**, under the GitHub backend tool name, without a version subfolder. `version_prefix` removes `linux-datarose-wsl-` from the published tag; `asset_pattern` chooses the Windows bundle:
 
    ```powershell
-   mise use -g 'github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@latest'
+   $installDir = Join-Path $env:LOCALAPPDATA 'mise\installs\github-datarose-dev-wsl2-linux-kernel'
+   mise install-into 'github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@latest' $installDir
    ```
 
-3. Resolve actual mise installation path and print `.wslconfig` values:
+   Unlike `mise use`, `mise install-into` writes directly to the chosen directory without a version-numbered subfolder. This installation is **not tracked** by mise, even though it lives under `installs/`; use `install-into` again to update it. **Do not combine this directory with regular `mise install` / `mise use` for the same tool:** `install-into` replaces the entire destination and may delete versioned installations. If `MISE_INSTALLS_DIR` or `MISE_DATA_DIR` is customized, adjust the path to match your mise configuration.
+
+3. Verify installed files and print `.wslconfig` values:
 
    ```powershell
-   $installDir = (mise where 'github:datarose-dev/WSL2-Linux-Kernel').Trim()
+   $installDir = Join-Path $env:LOCALAPPDATA 'mise\installs\github-datarose-dev-wsl2-linux-kernel'
    $kernel = Join-Path $installDir 'bzImage'
    $modules = Join-Path $installDir 'modules.vhdx'
    if (!(Test-Path $kernel) -or !(Test-Path $modules)) {
@@ -69,15 +72,15 @@ Install **mise on Windows**, not inside the WSL distribution: `.wslconfig` needs
    "kernelModules=$($modules.Replace('\', '\\'))"
    ```
 
-4. In `%USERPROFILE%\.wslconfig`, add the two printed lines under the existing `[wsl2]` section. Create that section if missing; **keep other settings**. Example (your mise path and version will differ):
+4. In `%USERPROFILE%\.wslconfig`, add the two printed lines under the existing `[wsl2]` section. Create that section if missing; **keep other settings**. Example (your Windows username will differ):
 
    ```ini
    [wsl2]
-   kernel=C:\\path\\reported\\by\\mise\\bzImage
-   kernelModules=C:\\path\\reported\\by\\mise\\modules.vhdx
+   kernel=C:\\Users\\you\\AppData\\Local\\mise\\installs\\github-datarose-dev-wsl2-linux-kernel\\bzImage
+   kernelModules=C:\\Users\\you\\AppData\\Local\\mise\\installs\\github-datarose-dev-wsl2-linux-kernel\\modules.vhdx
    ```
 
-   Example paths are placeholders, not valid install locations. **Copy actual printed lines** from step 3.
+   Example paths are placeholders. **Copy actual printed lines** from step 3. These paths remain unchanged across kernel updates.
 
 5. Restart WSL from PowerShell, then verify inside test distribution:
 
@@ -95,25 +98,28 @@ Install **mise on Windows**, not inside the WSL distribution: `.wslconfig` needs
 
 ### Keep current
 
-`latest` does **not** update files automatically. Check and install new releases explicitly in PowerShell:
+`@latest` does **not** update files automatically. Reinstall the latest release explicitly in PowerShell:
 
 ```powershell
-mise outdated
-mise upgrade --global --no-prune 'github:datarose-dev/WSL2-Linux-Kernel'
+wsl --shutdown
+$installDir = Join-Path $env:LOCALAPPDATA 'mise\installs\github-datarose-dev-wsl2-linux-kernel'
+mise install-into 'github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@latest' $installDir
 ```
 
-Then repeat step 3, update **both** paths in `.wslconfig`, and run `wsl --shutdown`. `--no-prune` prevents cleanup of the previous version while `.wslconfig` still references it; older installations can be removed after switching successfully. `wsl --update` does not update this custom kernel.
+Confirm replacement only if the directory contains this standalone kernel installation; `install-into` deletes all previous contents before reinstalling. Then start WSL. `.wslconfig` paths stay unchanged. `mise outdated` and `mise upgrade` do not manage an `install-into` installation. `wsl --update` does not update this custom kernel.
 
 ### Pin a version
 
-Instead of `@latest`, select a published Datarose version (without the `linux-datarose-wsl-` prefix):
+Instead of `@latest`, choose a published Datarose version (without the `linux-datarose-wsl-` prefix):
 
 ```powershell
 mise ls-remote 'github:datarose-dev/WSL2-Linux-Kernel[version_prefix=linux-datarose-wsl-]'
-mise use -g 'github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@6.18.60.1'
+wsl --shutdown
+$installDir = Join-Path $env:LOCALAPPDATA 'mise\installs\github-datarose-dev-wsl2-linux-kernel'
+mise install-into 'github:datarose-dev/WSL2-Linux-Kernel[asset_pattern=wsl2-kernel-windows-x64.zip,version_prefix=linux-datarose-wsl-]@6.18.60.1' $installDir
 ```
 
-Exact versions stay pinned during `mise upgrade`; update the version explicitly when desired. Re-run step 3 and update `.wslconfig` after changing version. For rebuilds use the corresponding `-r2`, `-r3`, etc. version suffix.
+Confirm replacement only if the directory contains this standalone kernel installation. The selected version remains installed until `install-into` runs again. For rebuilds use the corresponding `-r2`, `-r3`, etc. version suffix. `.wslconfig` paths remain unchanged.
 
 ### Revert
 
