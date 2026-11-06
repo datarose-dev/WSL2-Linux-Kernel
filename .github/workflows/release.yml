@@ -119,18 +119,23 @@ jobs:
           release_tag="$base_tag"
 
           # Skip scheduled duplicates; number manual rebuilds -r2, -r3, etc.
-          if gh release view "$base_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          has_existing_release=false
+          max_revision=1
+          while IFS= read -r tag; do
+            if [[ "$tag" == "$base_tag" || "$tag" == "$base_tag"-r* ]]; then
+              has_existing_release=true
+            fi
+            if [[ "$tag" =~ ^${base_tag}-r([0-9]+)$ ]]; then
+              (( ${BASH_REMATCH[1]} > max_revision )) && max_revision="${BASH_REMATCH[1]}"
+            fi
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq '.[].tag_name')
+
+          if [[ "$has_existing_release" == true ]]; then
             if [[ "$GITHUB_EVENT_NAME" == 'schedule' ]]; then
               echo "Already released: $base_tag"
               echo 'build=false' >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            max_revision=1
-            while IFS= read -r tag; do
-              if [[ "$tag" =~ ^${base_tag}-r([0-9]+)$ ]]; then
-                (( ${BASH_REMATCH[1]} > max_revision )) && max_revision="${BASH_REMATCH[1]}"
-              fi
-            done < <(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq '.[].tag_name')
             release_tag="${base_tag}-r$((max_revision + 1))"
           fi
           {
